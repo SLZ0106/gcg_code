@@ -45,11 +45,11 @@ def get_completion(prompt: str, model, tokenizer) -> str:
     output_ids = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
-        max_new_tokens=256,
+        max_new_tokens=32,
         do_sample=False,
         num_beams=1,
         temperature=0.0,
-        repetition_penalty=1.2,
+        repetition_penalty=1,
         eos_token_id=tokenizer.eos_token_id,
     )
 
@@ -121,64 +121,66 @@ if __name__ == "__main__":
         raw_output_v = get_completion(message_v, model, tokenizer)
         print(f"raw_output_v: {raw_output_v}")
         label_v, var_v = parse_model_output(raw_output_v)
+        print(f"label_v: {label_v}, var_v: {var_v}")
         # 3b) Initial analysis on Benign function
         benign_code = benign_entry["func"]
         message_b = template.replace("{func}", benign_code)
         raw_output_b = get_completion(message_b, model, tokenizer)
         print(f"raw_output_b: {raw_output_b}")
         label_b, var_b = parse_model_output(raw_output_b)
+        print(f"label_b: {label_b}, var_b: {var_b}")
 
-    #     # 3c) If a vulnerable variable was identified, apply GCG attack once
-    #     gcg_message_b = template_gcg.replace("{func}", benign_code)
-    #     gcg_message_v = template_gcg.replace("{func}", vuln_code)
-    #     if label_v == "VULNERABLE":
-    #         attacked_vuln_code = apply_gcg_to_variable(gcg_message_v, var_v, model, tokenizer, num_steps=250)
-    #         print(f"attacked_vuln_code: {attacked_vuln_code}")
-    #     if label_b == "VULNERABLE":
-    #         attacked_benign_code = apply_gcg_to_variable(gcg_message_b, var_b, model, tokenizer, num_steps=250)
+        # 3c) If a vulnerable variable was identified, apply GCG attack once
+        gcg_message_b = template_gcg.replace("{func}", benign_code)
+        gcg_message_v = template_gcg.replace("{func}", vuln_code)
+        if label_v == "VULNERABLE":
+            attacked_vuln_code = apply_gcg_to_variable(gcg_message_v, var_v, model, tokenizer, num_steps=200)
+            print(f"attacked_vuln_code: {attacked_vuln_code}")
+        if label_b == "VULNERABLE":
+            attacked_benign_code = apply_gcg_to_variable(gcg_message_b, var_b, model, tokenizer, num_steps=200)
 
 
-    #     # 3d) Re-analyze the attacked vulnerable function
-    #     raw_output_v2 = get_completion(attacked_vuln_code, model, tokenizer)
-    #     print(f"raw_output_v2: {raw_output_v2}")
-    #     label_v2 = parse_label_only(raw_output_v2)
-    #     raw_output_b2 = get_completion(attacked_benign_code, model, tokenizer)
-    #     print(f"raw_output_b2 (benign): {raw_output_b2}")
-    #     label_b2 = parse_label_only(raw_output_b2)
+        # 3d) Re-analyze the attacked vulnerable function
+        raw_output_v2 = get_completion(attacked_vuln_code, model, tokenizer)
+        print(f"raw_output_v2: {raw_output_v2}")
+        label_v2 = parse_label_only(raw_output_v2)
+        raw_output_b2 = get_completion(attacked_benign_code, model, tokenizer)
+        print(f"raw_output_b2 (benign): {raw_output_b2}")
+        label_b2 = parse_label_only(raw_output_b2)
 
-    #     # 3e) Record all fields in a single dictionary
-    #     entry = {
-    #         "pair_index": pair_idx,
-    #         "vuln_idx": vuln_entry["idx"],
-    #         "benign_idx": benign_entry["idx"],
-    #         "initial_label_vuln": label_v,
-    #         "initial_variable_vuln": var_v,
-    #         "initial_label_benign": label_b,
-    #         "initial_variable_benign": var_b,
-    #         "attacked_vuln_code": attacked_vuln_code,
-    #         "relabel_vuln_after_attack": label_v2,
-    #         "attacked_benign_code": attacked_benign_code,
-    #         "relabel_benign_after_attack": label_b2,
-    #     }
-    #     results.append(entry)
+        # 3e) Record all fields in a single dictionary
+        entry = {
+            "pair_index": pair_idx,
+            "vuln_idx": vuln_entry["idx"],
+            "benign_idx": benign_entry["idx"],
+            "initial_label_vuln": label_v,
+            "initial_variable_vuln": var_v,
+            "initial_label_benign": label_b,
+            "initial_variable_benign": var_b,
+            "attacked_vuln_code": attacked_vuln_code,
+            "relabel_vuln_after_attack": label_v2,
+            "attacked_benign_code": attacked_benign_code,
+            "relabel_benign_after_attack": label_b2,
+        }
+        results.append(entry)
 
-    #     if label_v == "VULNERABLE":
-    #         vuln_correct_before += 1
-    #     if label_v2 == "VULNERABLE":
-    #         vuln_correct_after += 1
+        if label_v == "VULNERABLE":
+            vuln_correct_before += 1
+        if label_v2 == "VULNERABLE":
+            vuln_correct_after += 1
 
-    #     if label_b == "BENIGN":
-    #         benign_correct_before += 1
-    #     if label_b2 == "BENIGN":
-    #         benign_correct_after += 1
+        if label_b == "BENIGN":
+            benign_correct_before += 1
+        if label_b2 == "BENIGN":
+            benign_correct_after += 1
 
-    # # Step 4: Save all results to JSONL
-    # save_analysis_results(results, args.output_path)
+    # Step 4: Save all results to JSONL
+    save_analysis_results(results, args.output_path)
 
-    # print("\n=== Summary Statistics ===")
-    # print(f"Vulnerable correct before attack: {vuln_correct_before}/{total_pairs} = {100.0 * vuln_correct_before / total_pairs:.2f}%")
-    # print(f"Vulnerable correct after  attack: {vuln_correct_after}/{total_pairs} = {100.0 * vuln_correct_after / total_pairs:.2f}%")
-    # print(f"Benign    correct before attack: {benign_correct_before}/{total_pairs} = {100.0 * benign_correct_before / total_pairs:.2f}%")
-    # print(f"Benign    correct after  attack: {benign_correct_after}/{total_pairs} = {100.0 * benign_correct_after / total_pairs:.2f}%")
+    print("\n=== Summary Statistics ===")
+    print(f"Vulnerable correct before attack: {vuln_correct_before}/{total_pairs} = {100.0 * vuln_correct_before / total_pairs:.2f}%")
+    print(f"Vulnerable correct after  attack: {vuln_correct_after}/{total_pairs} = {100.0 * vuln_correct_after / total_pairs:.2f}%")
+    print(f"Benign    correct before attack: {benign_correct_before}/{total_pairs} = {100.0 * benign_correct_before / total_pairs:.2f}%")
+    print(f"Benign    correct after  attack: {benign_correct_after}/{total_pairs} = {100.0 * benign_correct_after / total_pairs:.2f}%")
 
-    # print(f"Analysis and GCG attack results saved to: {args.output_path}")
+    print(f"Analysis and GCG attack results saved to: {args.output_path}")
