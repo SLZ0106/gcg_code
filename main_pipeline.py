@@ -210,12 +210,20 @@ def process_single_pair(pair_idx: int, vuln_entry: dict, benign_entry: dict,
         entry["initial_label_benign"] = label_b
         entry["initial_variable_benign"] = var_b
         
+        # Add these variables before the GCG section:
+        vuln_best_string = None
+        attack_successful_on_vuln = False
+
         # GCG attack on vulnerable function if needed
         if label_v == "VULNERABLE" and var_v:
             try:
                 print(f"  Applying GCG attack on vulnerable function (variable: {var_v})...")
                 gcg_message_v = template.replace("{func}", vuln_code)
-                attacked_vuln_code = apply_gcg_to_variable(gcg_message_v, var_v, model, tokenizer, num_steps=250)
+                
+                # Now returns tuple: (code, best_string)
+                attacked_vuln_code, vuln_best_string = apply_gcg_to_variable(
+                    gcg_message_v, var_v, model, tokenizer, num_steps=250
+                )
                 entry["attacked_vuln_code"] = attacked_vuln_code
                 
                 # Re-analyze after attack
@@ -226,35 +234,88 @@ def process_single_pair(pair_idx: int, vuln_entry: dict, benign_entry: dict,
                 label_v2, _ = parse_model_output(raw_output_v2)
                 entry["relabel_vuln_after_attack"] = label_v2
                 print(f"  After attack label: {label_v2}")
+                
+                # Check if attack was successful
+                if label_v2 == "BENIGN":
+                    attack_successful_on_vuln = True
+                    print(f"  [SUCCESS] Attack changed VULNERABLE to BENIGN!")
+                    print(f"  Best string that worked: {vuln_best_string}")
+                    
             except Exception as e:
                 print(f"  GCG attack on vulnerable failed: {e}")
                 entry["relabel_vuln_after_attack"] = label_v
         else:
             print(f"  [SKIP] Not VULNERABLE or no variable found")
             entry["relabel_vuln_after_attack"] = label_v
-            
-        # GCG attack on benign function if needed
+
+        # GCG attack on benign function if needed - WITH OPTIMIZATION
         if label_b == "VULNERABLE" and var_b:
             try:
-                print(f"  Applying GCG attack on benign function (variable: {var_b})...")
-                gcg_message_b = template.replace("{func}", benign_code)
-                attacked_benign_code = apply_gcg_to_variable(gcg_message_b, var_b, model, tokenizer, num_steps=250)
-                entry["attacked_benign_code"] = attacked_benign_code
-                
-                # Re-analyze after attack
-                print("  Re-analyzing attacked benign function...")
-                raw_output_b2 = get_completion(attacked_benign_code, model, tokenizer)
-                entry["benign_output_after_attack"] = raw_output_b2
-                print(f"  After attack output: {raw_output_b2}")
-                label_b2, _ = parse_model_output(raw_output_b2)
-                entry["relabel_benign_after_attack"] = label_b2
-                print(f"  After attack label: {label_b2}")
+                # Check if we can reuse the successful best_string
+                if attack_successful_on_vuln and var_v == var_b and vuln_best_string:
+                    print(f"  [OPTIMIZATION] Same variable name ({var_v} == {var_b})")
+                    print(f"  Trying best_string from vulnerable: {vuln_best_string}")
+                    
+                    # Direct replacement
+                    test_benign_code = benign_code.replace(var_b, vuln_best_string, 1)
+                    
+                    # Create prompt and test
+                    test_message = template.replace("{func}", test_benign_code)
+                    test_output = get_completion(test_message, model, tokenizer)
+                    test_label, _ = parse_model_output(test_output)
+                    
+                    if test_label == "BENIGN":
+                        # Optimization worked!
+                        print(f"  [SUCCESS] Reused best_string worked! Got BENIGN without GCG")
+                        entry["attacked_benign_code"] = test_benign_code
+                        entry["benign_output_after_attack"] = test_output
+                        entry["relabel_benign_after_attack"] = "BENIGN"
+                        entry["optimization_note"] = "reused_best_string_from_vulnerable"
+                    else:
+                        # Still VULNERABLE, need full GCG
+                        print(f"  Still VULNERABLE after reuse, running full GCG attack...")
+                        gcg_message_b = template.replace("{func}", benign_code)
+                        attacked_benign_code, _ = apply_gcg_to_variable(
+                            gcg_message_b, var_b, model, tokenizer, num_steps=250
+                        )
+                        entry["attacked_benign_code"] = attacked_benign_code
+                        
+                        # Re-analyze
+                        raw_output_b2 = get_completion(attacked_benign_code, model, tokenizer)
+                        entry["benign_output_after_attack"] = raw_output_b2
+                        print(f"  After attack output: {raw_output_b2}")
+                        label_b2, _ = parse_model_output(raw_output_b2)
+                        entry["relabel_benign_after_attack"] = label_b2
+                        print(f"  After attack label: {label_b2}")
+                else:
+                    # Different variables or no successful attack - do normal GCG
+                    if var_v != var_b:
+                        print(f"  Different variables: vuln={var_v}, benign={var_b}")
+                    elif not attack_successful_on_vuln:
+                        print(f"  Vulnerable attack was not successful, can't reuse")
+                        
+                    print(f"  Applying GCG attack on benign function (variable: {var_b})...")
+                    gcg_message_b = template.replace("{func}", benign_code)
+                    attacked_benign_code, _ = apply_gcg_to_variable(
+                        gcg_message_b, var_b, model, tokenizer, num_steps=250
+                    )
+                    entry["attacked_benign_code"] = attacked_benign_code
+                    
+                    # Re-analyze after attack
+                    print("  Re-analyzing attacked benign function...")
+                    raw_output_b2 = get_completion(attacked_benign_code, model, tokenizer)
+                    entry["benign_output_after_attack"] = raw_output_b2
+                    print(f"  After attack output: {raw_output_b2}")
+                    label_b2, _ = parse_model_output(raw_output_b2)
+                    entry["relabel_benign_after_attack"] = label_b2
+                    print(f"  After attack label: {label_b2}")
+                    
             except Exception as e:
                 print(f"  GCG attack on benign failed: {e}")
                 entry["relabel_benign_after_attack"] = label_b
         else:
             entry["relabel_benign_after_attack"] = label_b
-            
+             
     except Exception as e:
         print(f"  Unexpected error: {e}")
         entry["error_message"] = str(e)

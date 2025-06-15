@@ -202,4 +202,4 @@ def apply_gcg_to_variable(
     #print(f"with_placeholder: {with_placeholder}")
     best_str = run_gcg_on_function(with_placeholder, gcg_model, gcg_tokenizer, var_name, num_steps)
     optimized_code = func_code.replace(var_name, best_str)
-    return optimized_code
+    return optimized_code, best_str
