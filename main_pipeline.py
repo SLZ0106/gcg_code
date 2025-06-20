@@ -4,7 +4,6 @@ import json
 import argparse
 import os
 import torch
-from peft import PeftModel, PeftConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from utils import (
@@ -26,7 +25,7 @@ def get_completion(prompt: str, model, tokenizer) -> str:
 
     Args:
         prompt (str): The full prompt string to send to the model.
-        model: The PEFT-wrapped causal LM.
+        model: The causal LM.
         tokenizer: The corresponding tokenizer.
 
     Returns:
@@ -212,7 +211,9 @@ def process_single_pair(pair_idx: int, vuln_entry: dict, benign_entry: dict,
         
         # Add these variables before the GCG section:
         vuln_best_string = None
+        benign_best_string = None
         attack_successful_on_vuln = False
+        attack_successful_on_benign = False
 
         # GCG attack on vulnerable function if needed
         if label_v == "VULNERABLE" and var_v:
@@ -275,7 +276,7 @@ def process_single_pair(pair_idx: int, vuln_entry: dict, benign_entry: dict,
                         # Still VULNERABLE, need full GCG
                         print(f"  Still VULNERABLE after reuse, running full GCG attack...")
                         gcg_message_b = template.replace("{func}", benign_code)
-                        attacked_benign_code, _ = apply_gcg_to_variable(
+                        attacked_benign_code, benign_best_string = apply_gcg_to_variable(
                             gcg_message_b, var_b, model, tokenizer, num_steps=250
                         )
                         entry["attacked_benign_code"] = attacked_benign_code
@@ -296,7 +297,7 @@ def process_single_pair(pair_idx: int, vuln_entry: dict, benign_entry: dict,
                         
                     print(f"  Applying GCG attack on benign function (variable: {var_b})...")
                     gcg_message_b = template.replace("{func}", benign_code)
-                    attacked_benign_code, _ = apply_gcg_to_variable(
+                    attacked_benign_code, benign_best_string = apply_gcg_to_variable(
                         gcg_message_b, var_b, model, tokenizer, num_steps=250
                     )
                     entry["attacked_benign_code"] = attacked_benign_code
@@ -315,6 +316,33 @@ def process_single_pair(pair_idx: int, vuln_entry: dict, benign_entry: dict,
                 entry["relabel_benign_after_attack"] = label_b
         else:
             entry["relabel_benign_after_attack"] = label_b
+        
+        # Bidirectional optimization - if vulnerable failed but benign succeeded
+        if (var_v == var_b and 
+            label_v == "VULNERABLE" and
+            entry.get("relabel_vuln_after_attack") == "VULNERABLE" and
+            entry.get("relabel_benign_after_attack") == "BENIGN" and
+            benign_best_string):
+            
+            print(f"\n  [BIDIRECTIONAL] Trying benign's successful attack on vulnerable...")
+            
+            try:
+                reverse_vuln_code = vuln_code.replace(var_v, benign_best_string, 1)
+                reverse_message = template.replace("{func}", reverse_vuln_code)
+                reverse_output = get_completion(reverse_message, model, tokenizer)
+                reverse_label, _ = parse_model_output(reverse_output)
+                
+                if reverse_label == "BENIGN":
+                    print(f"  [SUCCESS] Bidirectional optimization worked!")
+                    entry["attacked_vuln_code"] = reverse_vuln_code
+                    entry["vuln_output_after_attack"] = reverse_output
+                    entry["relabel_vuln_after_attack"] = "BENIGN"
+                    entry["bidirectional_optimization"] = True
+                else:
+                    print(f"  Bidirectional didn't help, keeping VULNERABLE")
+                    
+            except Exception as e:
+                print(f"  Bidirectional error: {e}")
              
     except Exception as e:
         print(f"  Unexpected error: {e}")
